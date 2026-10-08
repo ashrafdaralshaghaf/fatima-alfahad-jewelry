@@ -1,0 +1,16 @@
+{
+  "name": "fatima-alfahad-jewelry",
+  "private": true,
+  "scripts": {
+    "setup": "npm --prefix server install && npm --prefix admin install && npm run build:admin",
+    "build:admin": "npm --prefix admin run build",
+    "dev:db": "npm --prefix server run dev:db",
+    "dev": "npm --prefix server run dev",
+    "dev:admin": "npm --prefix admin run dev",
+    "migrate": "npm --prefix server run migrate",
+    "seed": "npm --prefix server run seed",
+    "create-admin": "npm --prefix server run create-admin",
+    "start": "npm --prefix server start",
+    "test": "npm --prefix server test"
+  }
+}

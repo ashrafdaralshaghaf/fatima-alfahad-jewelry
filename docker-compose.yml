@@ -1,0 +1,15 @@
+# Optional: a local PostgreSQL if you prefer Docker to `npm run dev:db`.
+#   docker compose up -d
+# then use DATABASE_URL=postgres://fatima:fatima@127.0.0.1:5432/fatima
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: fatima
+      POSTGRES_PASSWORD: fatima
+      POSTGRES_DB: fatima
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+volumes:
+  pgdata:

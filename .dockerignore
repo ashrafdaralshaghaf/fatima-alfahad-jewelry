@@ -1,0 +1,7 @@
+**/node_modules
+**/.env
+server/.pgdata
+server/uploads
+server/private
+admin/dist
+.git
