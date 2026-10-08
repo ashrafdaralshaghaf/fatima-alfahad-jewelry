@@ -13,6 +13,7 @@ import Customers from "./pages/Customers.jsx";
 import { Appointments, Bespoke } from "./pages/Requests.jsx";
 import Subscribers from "./pages/Subscribers.jsx";
 import Settings from "./pages/Settings.jsx";
+import Admins from "./pages/Admins.jsx";
 
 export default function App() {
   const [user, setUser] = useState(undefined); // undefined = loading, null = signed out
@@ -65,6 +66,7 @@ function Shell({ user, onSignOut }) {
           <Item to="/bespoke" n={badges.bespoke}>Bespoke requests</Item>
           <Item to="/subscribers">Newsletter</Item>
           <h4>Store</h4>
+          <Item to="/admins">Administrators</Item>
           <Item to="/settings">Settings & security</Item>
         </nav>
         <div className="me">
@@ -89,6 +91,7 @@ function Shell({ user, onSignOut }) {
           <Route path="/appointments" element={<Appointments />} />
           <Route path="/bespoke" element={<Bespoke />} />
           <Route path="/subscribers" element={<Subscribers />} />
+          <Route path="/admins" element={<Admins />} />
           <Route path="/settings" element={<Settings user={user} />} />
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>

@@ -9,7 +9,8 @@ import { requireAdmin, adminLimiter } from "../middleware.js";
 import { IMAGE_URL, memoryUpload, saveImage } from "../services/images.js";
 import { audit, DEFAULT_RATES, getRates, getSetting, setSetting } from "../services/common.js";
 import { layout, p, sendMail } from "../services/mailer.js";
-import { escHtml } from "../security.js";
+import { escHtml, hashPassword } from "../security.js";
+import crypto from "node:crypto";
 
 export const admin = Router();
 admin.use(adminLimiter, requireAdmin);
@@ -523,4 +524,80 @@ admin.get("/audit", async (req, res) => {
     query(`SELECT COUNT(*) AS n FROM audit_log`),
   ]);
   res.json({ items: rows, total: c.n, page, limit });
+});
+
+/* ---------------- administrators ---------------- */
+const adminRow = (u) => ({ id: u.id, email: u.email, fullName: u.full_name, isActive: u.is_active, lastLoginAt: u.last_login_at, createdAt: u.created_at });
+const tempPassword = () => crypto.randomBytes(12).toString("base64url");
+const adminEmail = z.string().trim().toLowerCase().max(200).pipe(z.email());
+
+async function otherActiveAdmins(exceptId) {
+  const { rows } = await query(`SELECT COUNT(*) AS n FROM users WHERE role = 'admin' AND is_active AND id <> $1`, [exceptId]);
+  return rows[0].n;
+}
+
+admin.get("/admins", async (_req, res) => {
+  const { rows } = await query(`SELECT id, email, full_name, is_active, last_login_at, created_at FROM users WHERE role = 'admin' ORDER BY created_at`);
+  res.json({ items: rows.map(adminRow), me: _req.user.id });
+});
+
+// Creates (or promotes) an administrator and returns a one-time temporary password.
+admin.post("/admins", async (req, res) => {
+  const d = parse(z.object({ email: adminEmail, fullName: z.string().trim().min(2).max(100) }), req.body);
+  const password = tempPassword();
+  const hash = await hashPassword(password);
+  const ex = (await query(`SELECT id, role FROM users WHERE lower(email) = $1`, [d.email])).rows[0];
+  if (ex?.role === "admin") throw new HttpError(409, "This e-mail is already an administrator", "duplicate");
+  let id;
+  if (ex) { // existing customer account becomes an administrator
+    await query(`UPDATE users SET role = 'admin', is_active = true, password_hash = $2, full_name = $3, failed_attempts = 0, locked_until = NULL, updated_at = now() WHERE id = $1`, [ex.id, hash, d.fullName]);
+    await query(`DELETE FROM sessions WHERE user_id = $1`, [ex.id]);
+    id = ex.id;
+  } else {
+    id = (await query(`INSERT INTO users (email, password_hash, full_name, role) VALUES ($1,$2,$3,'admin') RETURNING id`, [d.email, hash, d.fullName])).rows[0].id;
+  }
+  await audit(req, "create", "admin", d.email);
+  res.status(201).json({ id, temporaryPassword: password });
+});
+
+admin.patch("/admins/:id", async (req, res) => {
+  const id = parse(uuid, req.params.id);
+  const d = parse(z.object({ email: adminEmail.optional(), fullName: z.string().trim().min(2).max(100).optional(), isActive: z.boolean().optional() }), req.body);
+  const { rows } = await query(`SELECT * FROM users WHERE id = $1 AND role = 'admin'`, [id]);
+  const u = rows[0];
+  if (!u) throw notFound();
+  if (d.isActive === false) {
+    if (id === req.user.id) throw bad("You cannot disable your own account");
+    if (!(await otherActiveAdmins(id))) throw bad("At least one active administrator is required");
+  }
+  const emailChanged = d.email && d.email !== u.email.toLowerCase();
+  await query(
+    `UPDATE users SET email = COALESCE($2, email), full_name = COALESCE($3, full_name), is_active = COALESCE($4, is_active), updated_at = now() WHERE id = $1`,
+    [id, d.email ?? null, d.fullName ?? null, d.isActive ?? null]);
+  // signing the account out whenever its identity or status changes
+  if (emailChanged || d.isActive === false) await query(`DELETE FROM sessions WHERE user_id = $1 AND id IS DISTINCT FROM $2`, [id, id === req.user.id ? req.sessionId : null]);
+  await audit(req, "update", "admin", u.email, { email: d.email, active: d.isActive });
+  res.json({ ok: true });
+});
+
+admin.post("/admins/:id/reset-password", async (req, res) => {
+  const id = parse(uuid, req.params.id);
+  const password = tempPassword();
+  const r = await query(`UPDATE users SET password_hash = $2, failed_attempts = 0, locked_until = NULL, updated_at = now() WHERE id = $1 AND role = 'admin' RETURNING email`, [id, await hashPassword(password)]);
+  if (!r.rowCount) throw notFound();
+  await query(`DELETE FROM sessions WHERE user_id = $1 AND id IS DISTINCT FROM $2`, [id, id === req.user.id ? req.sessionId : null]);
+  await audit(req, "reset-password", "admin", r.rows[0].email);
+  res.json({ temporaryPassword: password });
+});
+
+admin.delete("/admins/:id", async (req, res) => {
+  const id = parse(uuid, req.params.id);
+  if (id === req.user.id) throw bad("You cannot delete your own account");
+  if (!(await otherActiveAdmins(id))) throw bad("At least one active administrator is required");
+  // keep history readable: demote and disable instead of removing the row (orders/audit reference users)
+  const r = await query(`UPDATE users SET role = 'customer', is_active = false, updated_at = now() WHERE id = $1 AND role = 'admin' RETURNING email`, [id]);
+  if (!r.rowCount) throw notFound();
+  await query(`DELETE FROM sessions WHERE user_id = $1`, [id]);
+  await audit(req, "remove", "admin", r.rows[0].email);
+  res.json({ ok: true });
 });

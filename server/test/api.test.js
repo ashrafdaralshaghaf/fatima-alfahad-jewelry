@@ -311,3 +311,35 @@ test("SQL injection attempts in search/login are treated as data", async () => {
   const l = await new Client().req("POST", "/api/auth/login", { email: "' OR '1'='1", password: "x" });
   assert.equal(l.status, 400);
 });
+
+test("admin: manage administrators safely", async () => {
+  const adm = new Client();
+  const me = (await adm.req("POST", "/api/auth/login", { email: adminEmail, password: adminPass })).data.user;
+  const email2 = `admin2-${uniq}@test.local`;
+  let r = await adm.req("POST", "/api/admin/admins", { email: email2, fullName: "Second Admin" });
+  assert.equal(r.status, 201);
+  const temp = r.data.temporaryPassword, id2 = r.data.id;
+  assert.ok(temp.length >= 12);
+  assert.equal((await adm.req("POST", "/api/admin/admins", { email: email2, fullName: "Dup" })).status, 409);
+  const second = new Client();
+  assert.equal((await second.req("POST", "/api/auth/login", { email: email2, password: temp })).data.user.role, "admin");
+  assert.equal((await second.req("GET", "/api/admin/stats")).status, 200);
+
+  assert.equal((await adm.req("PATCH", `/api/admin/admins/${me.id}`, { isActive: false })).status, 400, "cannot disable yourself");
+  assert.equal((await adm.req("DELETE", `/api/admin/admins/${me.id}`)).status, 400, "cannot delete yourself");
+
+  const email3 = `admin3-${uniq}@test.local`;
+  assert.equal((await adm.req("PATCH", `/api/admin/admins/${id2}`, { email: email3 })).status, 200);
+  assert.equal((await second.req("GET", "/api/admin/stats")).status, 401, "email change signs the admin out");
+
+  r = await adm.req("POST", `/api/admin/admins/${id2}/reset-password`);
+  assert.equal(r.status, 200);
+  assert.equal((await new Client().req("POST", "/api/auth/login", { email: email3, password: r.data.temporaryPassword })).status, 200);
+
+  assert.equal((await adm.req("DELETE", `/api/admin/admins/${id2}`)).status, 200);
+  const l = await new Client().req("POST", "/api/auth/login", { email: email3, password: r.data.temporaryPassword });
+  assert.equal(l.status, 401, "removed admin cannot sign in");
+  const cust = new Client();
+  await cust.req("POST", "/api/auth/register", { fullName: "Plain", email: `plain-${uniq}@test.local`, password: "Passw0rd-ok" });
+  assert.equal((await cust.req("GET", "/api/admin/admins")).status, 403);
+});
